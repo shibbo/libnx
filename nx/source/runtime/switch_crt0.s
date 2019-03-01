@@ -90,4 +90,4 @@ __nx_mod0:
     .word  __bss_end__          - __nx_mod0
     .word  __eh_frame_hdr_start - __nx_mod0
     .word  __eh_frame_hdr_end   - __nx_mod0
-    .word  0 // "offset to runtime-generated module object" (??)
+    .word  __bss_start__ - __nx_mod0
