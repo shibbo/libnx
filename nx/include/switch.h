@@ -67,6 +67,7 @@ extern "C" {
 #include "switch/services/usbds.h"
 #include "switch/services/usbhs.h"
 #include "switch/services/hid.h"
+#include "switch/services/hidsys.h"
 #include "switch/services/irs.h"
 #include "switch/services/pl.h"
 #include "switch/services/vi.h"
@@ -81,6 +82,10 @@ extern "C" {
 #include "switch/services/spl.h"
 #include "switch/services/ncm.h"
 #include "switch/services/psc.h"
+#include "switch/services/caps.h"
+#include "switch/services/capssc.h"
+#include "switch/services/capssu.h"
+#include "switch/services/nfc.h"
 
 #include "switch/display/binder.h"
 #include "switch/display/parcel.h"
@@ -104,6 +109,7 @@ extern "C" {
 #include "switch/applets/web.h"
 
 #include "switch/runtime/env.h"
+#include "switch/runtime/hosversion.h"
 #include "switch/runtime/nxlink.h"
 
 #include "switch/runtime/util/utf.h"

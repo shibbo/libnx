@@ -3,7 +3,7 @@
 #include "result.h"
 #include "arm/atomics.h"
 #include "kernel/ipc.h"
-#include "kernel/detect.h"
+#include "runtime/hosversion.h"
 #include "services/pm.h"
 #include "services/sm.h"
 
@@ -25,6 +25,10 @@ void pmdmntExit(void)
     if (atomicDecrement64(&g_pmdmntRefCnt) == 0) {
         serviceClose(&g_pmdmntSrv);
     }
+}
+
+Service* pmdmntGetServiceSession(void) {
+    return &g_pmdmntSrv;
 }
 
 Result pminfoInitialize(void)
@@ -74,7 +78,7 @@ Result pmdmntGetDebugProcesses(u32* out_count, u64* out_pids, size_t max_pids) {
     raw = ipcPrepareHeader(&c, sizeof(*raw));
 
     raw->magic = SFCI_MAGIC;
-    raw->cmd_id = kernelAbove500() ? 0 : 1;
+    raw->cmd_id = hosversionAtLeast(5,0,0) ? 0 : 1;
 
     Result rc = serviceIpcDispatch(&g_pmdmntSrv);
 
@@ -111,7 +115,7 @@ Result pmdmntStartProcess(u64 pid) {
     raw = ipcPrepareHeader(&c, sizeof(*raw));
 
     raw->magic = SFCI_MAGIC;
-    raw->cmd_id = kernelAbove500() ? 1 : 2;
+    raw->cmd_id = hosversionAtLeast(5,0,0) ? 1 : 2;
     raw->pid = pid;
 
     Result rc = serviceIpcDispatch(&g_pmdmntSrv);
@@ -144,7 +148,7 @@ Result pmdmntGetTitlePid(u64* pid_out, u64 title_id) {
     raw = ipcPrepareHeader(&c, sizeof(*raw));
 
     raw->magic = SFCI_MAGIC;
-    raw->cmd_id = kernelAbove500() ? 2 : 3;
+    raw->cmd_id = hosversionAtLeast(5,0,0) ? 2 : 3;
     raw->title_id = title_id;
 
     Result rc = serviceIpcDispatch(&g_pmdmntSrv);
@@ -182,7 +186,7 @@ Result pmdmntEnableDebugForTitleId(Handle* handle_out, u64 title_id) {
     raw = ipcPrepareHeader(&c, sizeof(*raw));
 
     raw->magic = SFCI_MAGIC;
-    raw->cmd_id = kernelAbove500() ? 3 : 4;
+    raw->cmd_id = hosversionAtLeast(5,0,0) ? 3 : 4;
     raw->title_id = title_id;
 
     Result rc = serviceIpcDispatch(&g_pmdmntSrv);
@@ -254,7 +258,7 @@ Result pmdmntGetApplicationPid(u64* pid_out) {
     raw = ipcPrepareHeader(&c, sizeof(*raw));
 
     raw->magic = SFCI_MAGIC;
-    raw->cmd_id = kernelAbove500() ? 4 : 5;
+    raw->cmd_id = hosversionAtLeast(5,0,0) ? 4 : 5;
 
     Result rc = serviceIpcDispatch(&g_pmdmntSrv);
 
@@ -290,7 +294,7 @@ Result pmdmntEnableDebugForApplication(Handle* handle_out) {
     raw = ipcPrepareHeader(&c, sizeof(*raw));
 
     raw->magic = SFCI_MAGIC;
-    raw->cmd_id = kernelAbove500() ? 5 : 6;
+    raw->cmd_id = hosversionAtLeast(5,0,0) ? 5 : 6;
 
     Result rc = serviceIpcDispatch(&g_pmdmntSrv);
 
@@ -314,7 +318,7 @@ Result pmdmntEnableDebugForApplication(Handle* handle_out) {
 }
 
 Result pmdmntDisableDebug(void) {
-    if (!kernelAbove600()) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
+    if (hosversionBefore(6,0,0)) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
 
     IpcCommand c;
     ipcInitialize(&c);
@@ -529,7 +533,7 @@ Result pmshellGetProcessEventInfo(PmProcessEventInfo* out) {
 }
 
 Result pmshellFinalizeDeadProcess(u64 pid) {
-    if (kernelAbove500()) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
+    if (hosversionAtLeast(5,0,0)) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
     
     IpcCommand c;
     ipcInitialize(&c);
@@ -564,7 +568,7 @@ Result pmshellFinalizeDeadProcess(u64 pid) {
 }
 
 Result pmshellClearProcessExceptionOccurred(u64 pid) {
-    if (kernelAbove500()) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
+    if (hosversionAtLeast(5,0,0)) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
     
     IpcCommand c;
     ipcInitialize(&c);
@@ -610,7 +614,7 @@ Result pmshellNotifyBootFinished(void) {
     raw = ipcPrepareHeader(&c, sizeof(*raw));
 
     raw->magic = SFCI_MAGIC;
-    raw->cmd_id = kernelAbove500() ? 5 : 7;
+    raw->cmd_id = hosversionAtLeast(5,0,0) ? 5 : 7;
 
     Result rc = serviceIpcDispatch(&g_pmshellSrv);
 
@@ -641,7 +645,7 @@ Result pmshellGetApplicationPid(u64* pid_out) {
     raw = ipcPrepareHeader(&c, sizeof(*raw));
 
     raw->magic = SFCI_MAGIC;
-    raw->cmd_id = kernelAbove500() ? 6 : 8;
+    raw->cmd_id = hosversionAtLeast(5,0,0) ? 6 : 8;
 
     Result rc = serviceIpcDispatch(&g_pmshellSrv);
 
@@ -666,7 +670,7 @@ Result pmshellGetApplicationPid(u64* pid_out) {
 }
 
 Result pmshellBoostSystemMemoryResourceLimit(u64 boost_size) {
-    if (!kernelAbove400()) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
+    if (hosversionBefore(4,0,0)) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
     
     IpcCommand c;
     ipcInitialize(&c);
@@ -680,7 +684,7 @@ Result pmshellBoostSystemMemoryResourceLimit(u64 boost_size) {
     raw = ipcPrepareHeader(&c, sizeof(*raw));
 
     raw->magic = SFCI_MAGIC;
-    raw->cmd_id = kernelAbove500() ? 7 : 9;
+    raw->cmd_id = hosversionAtLeast(5,0,0) ? 7 : 9;
     raw->boost_size = boost_size;
 
     Result rc = serviceIpcDispatch(&g_pmshellSrv);

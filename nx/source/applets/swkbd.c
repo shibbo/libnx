@@ -3,10 +3,10 @@
 #include <math.h>
 #include "types.h"
 #include "result.h"
-#include "kernel/detect.h"
 #include "services/applet.h"
 #include "applets/libapplet.h"
 #include "applets/swkbd.h"
+#include "runtime/hosversion.h"
 #include "runtime/util/utf.h"
 
 static Result _swkbdGetReplies(SwkbdInline* s);
@@ -51,19 +51,17 @@ static void _swkbdConfigClear(SwkbdConfig* c) {
 }
 
 static void _swkbdInitVersion(u32* version) {
-    *version=0x5;//1.0.0+ version
-    if (kernelAbove500()) {
+    u32 hosver = hosversionGet();
+    if (hosver >= MAKEHOSVERSION(5,0,0))
         *version = 0x50009;
-    }
-    else if (kernelAbove400()) {
+    else if (hosver >= MAKEHOSVERSION(4,0,0))
         *version = 0x40008;
-    }
-    else if (kernelAbove300()) {
+    else if (hosver >= MAKEHOSVERSION(3,0,0))
         *version = 0x30007;
-    }
-    else if (kernelAbove200()) {
+    else if (hosver >= MAKEHOSVERSION(2,0,0))
         *version = 0x10006;
-    }
+    else
+        *version=0x5;//1.0.0+ version
 }
 
 Result swkbdCreate(SwkbdConfig* c, s32 max_dictwords) {
@@ -348,6 +346,9 @@ Result swkbdInlineCreate(SwkbdInline* s) {
     memset(s, 0, sizeof(SwkbdInline));
 
     _swkbdInitVersion(&s->version);
+
+    //swkbd-inline is only available on 2.0.0+.
+    if (s->version < 0x10006) return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
 
     s->calcArg.unk_x0 = 0x30000;
     s->calcArg.size = sizeof(s->calcArg);
@@ -643,55 +644,25 @@ void swkbdInlineDisappear(SwkbdInline* s) {
     s->calcArg.flags = (s->calcArg.flags & ~0x4) | 0x80;
 }
 
-void swkbdInlineMakeAppearArg(SwkbdAppearArg* arg, u32 type, bool flag, const char* str) {
+void swkbdInlineMakeAppearArg(SwkbdAppearArg* arg, SwkbdType type) {
     memset(arg, 0, sizeof(SwkbdAppearArg));
-
-    u32 tmpval=0;
-    u8 tmpval2[2]={0};
-
-    switch(type) {
-        case 0:
-            tmpval = SwkbdType_NumPad;
-            tmpval2[0] = tmpval;
-        break;
-
-        case 1:
-            tmpval = 0x101;
-            tmpval2[0] = 1;
-            tmpval2[1] = 1;
-        break;
-
-        case 2:
-            tmpval = 3;
-            tmpval2[0] = 1;
-        break;
-
-        case 3:
-            tmpval = SwkbdType_QWERTY;
-        break;
-
-        case 4:
-            tmpval = SwkbdType_NumPad;
-        break;
-
-        case 5:
-            tmpval = SwkbdType_Normal;
-            arg->keySetDisableBitmask = SwkbdKeyDisableBitmask_DownloadCode;
-        break;
-
-        default:
-        return;
-    }
 
     arg->unk_x20 = -1;
     arg->unk_x24 = -1;
     arg->unk_x30 = 1;
-    arg->type = tmpval;
-    arg->dicFlag = tmpval2[0];
-    arg->returnButtonFlag = tmpval2[1];
-    if (flag) arg->flags = 0x4;
+    arg->type = type;
+}
 
+void swkbdInlineAppearArgSetOkButtonText(SwkbdAppearArg* arg,  const char* str) {
     _swkbdConvertToUTF16ByteSize(arg->okButtonText, str, sizeof(arg->okButtonText));
+}
+
+void swkbdInlineAppearArgSetLeftButtonText(SwkbdAppearArg* arg, const char* str) {
+    _swkbdConvertToUTF16(&arg->leftButtonText, str, 1);
+}
+
+void swkbdInlineAppearArgSetRightButtonText(SwkbdAppearArg* arg, const char* str) {
+    _swkbdConvertToUTF16(&arg->rightButtonText, str, 1);
 }
 
 void swkbdInlineSetVolume(SwkbdInline* s, float volume) {

@@ -1,73 +1,105 @@
 // Copyright 2017 plutoo
 #include "types.h"
+#include "result.h"
 #include "kernel/detect.h"
 #include "kernel/mutex.h"
 #include "kernel/svc.h"
+#include <malloc.h>
 
-static bool g_IsAbove200;
-static bool g_IsAbove300;
-static bool g_IsAbove400;
-static bool g_IsAbove500;
-static bool g_IsAbove600;
-static bool g_HasCached = 0;
-static Mutex g_Mutex;
+static bool g_VersionCached;
+static Mutex g_VersionMutex;
+static int g_Version;
 
-static void _CacheValues(void)
+static bool g_JitKernelPatchCached;
+static Mutex g_JitKernelPatchMutex;
+static bool g_JitKernelPatchDetected;
+
+static void _CacheVersion(void)
 {
-    if (__atomic_load_n(&g_HasCached, __ATOMIC_SEQ_CST))
+    if (__atomic_load_n(&g_VersionCached, __ATOMIC_SEQ_CST))
         return;
 
-    mutexLock(&g_Mutex);
+    mutexLock(&g_VersionMutex);
 
-    if (g_HasCached) {
-        mutexUnlock(&g_Mutex);
+    if (g_VersionCached) {
+        mutexUnlock(&g_VersionMutex);
         return;
     }
 
     u64 tmp;
-    g_IsAbove200 = (svcGetInfo(&tmp, 12, INVALID_HANDLE, 0) != 0xF001);
-    g_IsAbove300 = (svcGetInfo(&tmp, 18, INVALID_HANDLE, 0) != 0xF001);
-    g_IsAbove400 = (svcGetInfo(&tmp, 19, INVALID_HANDLE, 0) != 0xF001);
-    g_IsAbove500 = (svcGetInfo(&tmp, 20, INVALID_HANDLE, 0) != 0xF001);
-    g_IsAbove600 = (svcGetInfo(&tmp, 21, INVALID_HANDLE, 0) != 0xF001);
+    g_Version = 1;
+    if (R_VALUE(svcGetInfo(&tmp, 12, INVALID_HANDLE, 0)) != KERNELRESULT(InvalidEnumValue))
+        g_Version = 2;
+    if (R_VALUE(svcGetInfo(&tmp, 18, INVALID_HANDLE, 0)) != KERNELRESULT(InvalidEnumValue))
+        g_Version = 3;
+    if (R_VALUE(svcGetInfo(&tmp, 19, INVALID_HANDLE, 0)) != KERNELRESULT(InvalidEnumValue))
+        g_Version = 4;
+    if (R_VALUE(svcGetInfo(&tmp, 20, INVALID_HANDLE, 0)) != KERNELRESULT(InvalidEnumValue))
+        g_Version = 5;
+    if (R_VALUE(svcGetInfo(&tmp, 21, INVALID_HANDLE, 0)) != KERNELRESULT(InvalidEnumValue))
+        g_Version = 6;
 
-    g_IsAbove500 |= g_IsAbove600;
-    g_IsAbove400 |= g_IsAbove500;
-    g_IsAbove300 |= g_IsAbove400;
-    g_IsAbove200 |= g_IsAbove300;
+    __atomic_store_n(&g_VersionCached, true, __ATOMIC_SEQ_CST);
 
-    __atomic_store_n(&g_HasCached, true, __ATOMIC_SEQ_CST);
-
-    mutexUnlock(&g_Mutex);
+    mutexUnlock(&g_VersionMutex);
 }
 
-bool kernelAbove200(void) {
-    _CacheValues();
-    return g_IsAbove200;
+static void _CacheJitKernelPatch(void)
+{
+    if (__atomic_load_n(&g_JitKernelPatchCached, __ATOMIC_SEQ_CST))
+        return;
+
+    mutexLock(&g_JitKernelPatchMutex);
+
+    if (g_JitKernelPatchCached) {
+        mutexUnlock(&g_JitKernelPatchMutex);
+        return;
+    }
+
+    void* heap = memalign(0x1000, 0x1000);
+
+    if (heap != NULL) {
+        Handle code;
+        Result rc;
+        rc = svcCreateCodeMemory(&code, heap, 0x1000);
+
+        if (R_SUCCEEDED(rc)) {
+            // On an unpatched kernel on 5.0.0 and above, this would return InvalidMemoryState (0xD401).
+            // It is not allowed for the creator-process of a CodeMemory object to use svcControlCodeMemory on it.
+            // If the patch is present, the function should return InvalidEnumValue (0xF001), because -1 is not a valid enum CodeOperation.
+            rc = svcControlCodeMemory(code, -1, 0, 0x1000, 0);
+
+            g_JitKernelPatchDetected = R_VALUE(rc) == KERNELRESULT(InvalidEnumValue);
+            __atomic_store_n(&g_JitKernelPatchCached, true, __ATOMIC_SEQ_CST);
+
+            svcCloseHandle(code);
+        }
+
+        free(heap);
+    }
+
+    mutexUnlock(&g_JitKernelPatchMutex);
 }
 
-bool kernelAbove300(void) {
-    _CacheValues();
-    return g_IsAbove300;
-}
-
-bool kernelAbove400(void) {
-    _CacheValues();
-    return g_IsAbove400;
-}
-
-bool kernelAbove500(void) {
-    _CacheValues();
-    return g_IsAbove500;
-}
-
-bool kernelAbove600(void) {
-    _CacheValues();
-    return g_IsAbove600;
+int detectKernelVersion(void) {
+    _CacheVersion();
+    return g_Version;
 }
 
 bool detectDebugger(void) {
     u64 tmp;
     svcGetInfo(&tmp, 8, 0, 0);
     return !!tmp;
+}
+
+bool detectJitKernelPatch(void) {
+    _CacheJitKernelPatch();
+    return g_JitKernelPatchDetected;
+}
+
+void detectIgnoreJitKernelPatch(void) {
+    mutexLock(&g_JitKernelPatchMutex);
+    g_JitKernelPatchDetected = false;
+    __atomic_store_n(&g_JitKernelPatchCached, true, __ATOMIC_SEQ_CST);
+    mutexUnlock(&g_JitKernelPatchMutex);
 }

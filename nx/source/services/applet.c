@@ -3,7 +3,6 @@
 #include "result.h"
 #include "arm/atomics.h"
 #include "kernel/ipc.h"
-#include "kernel/detect.h"
 #include "kernel/tmem.h"
 #include "kernel/event.h"
 #include "services/fatal.h"
@@ -11,6 +10,7 @@
 #include "services/apm.h"
 #include "services/sm.h"
 #include "runtime/env.h"
+#include "runtime/hosversion.h"
 
 __attribute__((weak)) u32 __nx_applet_type = AppletType_Default;
 __attribute__((weak)) bool __nx_applet_auto_notifyrunning = true;
@@ -432,7 +432,7 @@ Result appletSetFocusHandlingMode(AppletFocusHandlingMode mode) {
 
     rc = _appletSetFocusHandlingMode(invals[0], invals[1], invals[2]);
 
-    if (R_SUCCEEDED(rc) && kernelAbove200())
+    if (R_SUCCEEDED(rc) && hosversionAtLeast(2,0,0))
         rc = _appletSetOutOfFocusSuspendingEnabled(invals[3]);
 
     return rc;
@@ -702,6 +702,40 @@ static Result _appletCmdInU8(Service* srv, u8 inval, u64 cmd_id) {
     return rc;
 }
 
+static Result _appletCmdInU64(Service* srv, u64 inval, u64 cmd_id) {
+    IpcCommand c;
+    ipcInitialize(&c);
+
+    struct {
+        u64 magic;
+        u64 cmd_id;
+        u64 inval;
+    } *raw;
+
+    raw = serviceIpcPrepareHeader(srv, &c, sizeof(*raw));
+
+    raw->magic = SFCI_MAGIC;
+    raw->cmd_id = cmd_id;
+    raw->inval = inval;
+
+    Result rc = serviceIpcDispatch(srv);
+
+    if (R_SUCCEEDED(rc)) {
+        IpcParsedCommand r;
+        struct {
+            u64 magic;
+            u64 result;
+        } *resp;
+
+        serviceIpcParse(srv, &r, sizeof(*resp));
+        resp = r.Raw;
+
+        rc = resp->result;
+    }
+
+    return rc;
+}
+
 static Result _appletCmdInBool(Service* srv, bool inval, u64 cmd_id) {
     return _appletCmdInU8(srv, inval!=0, cmd_id);
 }
@@ -863,6 +897,183 @@ Result appletPopLaunchParameter(AppletStorage *s, AppletLaunchParameterKind kind
     return rc;
 }
 
+static Result _appletCreateApplicationAndPushAndRequestToStart(Service* srv, u64 cmd_id, u64 titleID, AppletStorage* s) {
+    IpcCommand c;
+    ipcInitialize(&c);
+
+    serviceSendObject(&s->s, &c);
+
+    struct {
+        u64 magic;
+        u64 cmd_id;
+        u64 titleID;
+    } *raw;
+
+    raw = serviceIpcPrepareHeader(srv, &c, sizeof(*raw));
+
+    raw->magic = SFCI_MAGIC;
+    raw->cmd_id = cmd_id;
+    raw->titleID = titleID;
+
+    Result rc = serviceIpcDispatch(srv);
+
+    if (R_SUCCEEDED(rc)) {
+        IpcParsedCommand r;
+        struct {
+            u64 magic;
+            u64 result;
+        } *resp;
+
+        serviceIpcParse(srv, &r, sizeof(*resp));
+        resp = r.Raw;
+
+        rc = resp->result;
+    }
+
+    return rc;
+}
+
+static Result _appletCreateApplicationAndPushAndRequestToStartForQuest(u64 titleID, AppletStorage* s, const AppletApplicationAttributeForQuest *attr) { //2.0.0+
+    IpcCommand c;
+    ipcInitialize(&c);
+
+    serviceSendObject(&s->s, &c);
+
+    struct {
+        u64 magic;
+        u64 cmd_id;
+        u32 val0, val1;
+        u64 titleID;
+    } PACKED *raw;
+
+    raw = serviceIpcPrepareHeader(&g_appletIFunctions, &c, sizeof(*raw));
+
+    raw->magic = SFCI_MAGIC;
+    raw->cmd_id = 11;
+    raw->val0 = attr->unk_x0;
+    raw->val1 = attr->unk_x4;
+    raw->titleID = titleID;
+
+    Result rc = serviceIpcDispatch(&g_appletIFunctions);
+
+    if (R_SUCCEEDED(rc)) {
+        IpcParsedCommand r;
+        struct {
+            u64 magic;
+            u64 result;
+        } *resp;
+
+        serviceIpcParse(&g_appletIFunctions, &r, sizeof(*resp));
+        resp = r.Raw;
+
+        rc = resp->result;
+    }
+
+    return rc;
+}
+
+static Result _appletCreateApplicationAndRequestToStart(u64 titleID) { //4.0.0+
+    return _appletCmdInU64(&g_appletIFunctions, titleID, 12);
+}
+
+static Result _appletCreateApplicationAndRequestToStartForQuest(u64 titleID, const AppletApplicationAttributeForQuest *attr) { //4.0.0+
+    IpcCommand c;
+    ipcInitialize(&c);
+
+    struct {
+        u64 magic;
+        u64 cmd_id;
+        u32 val0, val1;
+        u64 titleID;
+    } PACKED *raw;
+
+    raw = serviceIpcPrepareHeader(&g_appletIFunctions, &c, sizeof(*raw));
+
+    raw->magic = SFCI_MAGIC;
+    raw->cmd_id = 13;
+    raw->val0 = attr->unk_x0;
+    raw->val1 = attr->unk_x4;
+    raw->titleID = titleID;
+
+    Result rc = serviceIpcDispatch(&g_appletIFunctions);
+
+    if (R_SUCCEEDED(rc)) {
+        IpcParsedCommand r;
+        struct {
+            u64 magic;
+            u64 result;
+        } *resp;
+
+        serviceIpcParse(&g_appletIFunctions, &r, sizeof(*resp));
+        resp = r.Raw;
+
+        rc = resp->result;
+    }
+
+    return rc;
+}
+
+Result appletRequestLaunchApplication(u64 titleID, AppletStorage* s) {
+    AppletStorage tmpstorage={0};
+    Result rc=0;
+    bool is_libraryapplet = hosversionAtLeast(5,0,0) && __nx_applet_type == AppletType_LibraryApplet;
+
+    if (!serviceIsActive(&g_appletSrv) || (!_appletIsApplication() && !is_libraryapplet))
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+    if (s && !serviceIsActive(&s->s))
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+
+    if ((hosversionBefore(4,0,0) || is_libraryapplet) && s==NULL) {
+        s = &tmpstorage;
+        rc = appletCreateStorage(&tmpstorage, 0);
+        if (R_FAILED(rc)) return rc;
+    }
+
+    if (is_libraryapplet) {
+        rc = _appletCreateApplicationAndPushAndRequestToStart(&g_appletILibraryAppletSelfAccessor, 90, titleID, s);
+    }
+    else {
+        if (hosversionAtLeast(4,0,0) && s==NULL) {
+            rc = _appletCreateApplicationAndRequestToStart(titleID);
+        }
+        else {
+            rc = _appletCreateApplicationAndPushAndRequestToStart(&g_appletIFunctions, 10, titleID, s);
+        }
+    }
+
+    if (s) appletStorageClose(s);
+
+    return rc;
+}
+
+Result appletRequestLaunchApplicationForQuest(u64 titleID, AppletStorage* s, const AppletApplicationAttributeForQuest *attr) {
+    AppletStorage tmpstorage={0};
+    Result rc=0;
+
+    if (!serviceIsActive(&g_appletSrv) || !_appletIsApplication())
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+    if (s && !serviceIsActive(&s->s))
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+
+    if (hosversionBefore(4,0,0) && s==NULL) {
+        s = &tmpstorage;
+        rc = appletCreateStorage(&tmpstorage, 0);
+        if (R_FAILED(rc)) return rc;
+    }
+
+    if (hosversionAtLeast(4,0,0) && s==NULL) {
+        rc = _appletCreateApplicationAndRequestToStartForQuest(titleID, attr);
+    }
+    else {
+        if (hosversionBefore(3,0,0)) rc = MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
+        if (R_SUCCEEDED(rc)) rc = _appletCreateApplicationAndPushAndRequestToStartForQuest(titleID, s, attr);
+    }
+
+    if (s) appletStorageClose(s);
+
+    return rc;
+}
+
 Result appletGetDesiredLanguage(u64 *LanguageCode) {
     if (!serviceIsActive(&g_appletSrv) || !_appletIsApplication())
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
@@ -1010,7 +1221,7 @@ Result appletIsGamePlayRecordingSupported(bool *flag) {
     if (!serviceIsActive(&g_appletSrv) || !_appletIsRegularApplication())
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
 
-    if (!kernelAbove300())
+    if (hosversionBefore(3,0,0))
         return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
 
     struct {
@@ -1047,7 +1258,7 @@ static Result _appletInitializeGamePlayRecording(TransferMemory *tmem) {
     if (!serviceIsActive(&g_appletSrv) || !_appletIsRegularApplication())
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
 
-    if (!kernelAbove300())
+    if (hosversionBefore(3,0,0))
         return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
 
     return _appletCmdInTmem(&g_appletIFunctions, NULL, 66, tmem);
@@ -1060,7 +1271,7 @@ Result appletSetGamePlayRecordingState(bool state) {
     if (!serviceIsActive(&g_appletSrv) || !_appletIsRegularApplication() || g_appletRecordingInitialized==0)
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
 
-    if (!kernelAbove300())
+    if (hosversionBefore(3,0,0))
         return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
 
     struct {
@@ -1102,7 +1313,7 @@ Result appletInitializeGamePlayRecording(void) {
     //These checks are done in the called applet funcs, but do it here too so that tmemCreate() doesn't run when it's not needed.
     if (!serviceIsActive(&g_appletSrv) || !_appletIsRegularApplication())
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
-    if (!kernelAbove300())
+    if (hosversionBefore(3,0,0))
         return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
 
     rc = tmemCreate(&g_appletRecordingTmem, size, Perm_None);
@@ -1130,7 +1341,7 @@ Result appletQueryApplicationPlayStatistics(AppletApplicationPlayStatistics *sta
     if (!serviceIsActive(&g_appletSrv) || !_appletIsRegularApplication())
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
 
-    if (!kernelAbove500())
+    if (hosversionBefore(5,0,0))
         return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
 
     ipcAddRecvBuffer(&c, stats, count*sizeof(AppletApplicationPlayStatistics), BufferType_Normal);
@@ -1167,7 +1378,34 @@ Result appletQueryApplicationPlayStatistics(AppletApplicationPlayStatistics *sta
     return rc;
 }
 
+// IOverlayFunctions
+
+Result appletBeginToWatchShortHomeButtonMessage(void) {
+    if (__nx_applet_type != AppletType_OverlayApplet)
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+    
+    return _appletCmdNoIO(&g_appletIFunctions, 0);
+}
+
+Result appletEndToWatchShortHomeButtonMessage(void) {
+    if (__nx_applet_type != AppletType_OverlayApplet)
+        return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
+    
+    return _appletCmdNoIO(&g_appletIFunctions, 1);
+}
+
 // ICommonStateGetter
+
+Result appletHomeButtonReaderLockAccessorGetEvent(Event *out_event) {
+    Service ILockAccessor = {0};
+    Result rc = _appletGetSession(&g_appletICommonStateGetter, &ILockAccessor, 30);
+    if (R_FAILED(rc))
+        return rc;
+    
+    rc = _appletGetEvent(&ILockAccessor, out_event, 3, false);
+    serviceClose(&ILockAccessor);
+    return rc;
+}
 
 static Result _appletReceiveMessage(u32 *out) {
     IpcCommand c;
@@ -1520,7 +1758,7 @@ static Result _appletSetOutOfFocusSuspendingEnabled(u8 inval) {
 }
 
 Result appletSetScreenShotImageOrientation(s32 val) {
-    if (!kernelAbove300())
+    if (hosversionBefore(3,0,0))
         return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
 
     IpcCommand c;
@@ -1666,7 +1904,7 @@ static Result _appletHolderCreate(AppletHolder *h, AppletId id, LibAppletMode mo
 
     if (R_SUCCEEDED(rc)) rc = _appletGetEvent(&h->s, &h->StateChangedEvent, 0, false);//GetAppletStateChangedEvent
 
-    if (R_SUCCEEDED(rc) && kernelAbove200() && h->mode == LibAppletMode_Unknown3) rc = _appletGetIndirectLayerConsumerHandle(&h->s, &h->layer_handle);
+    if (R_SUCCEEDED(rc) && hosversionAtLeast(2,0,0) && h->mode == LibAppletMode_Unknown3) rc = _appletGetIndirectLayerConsumerHandle(&h->s, &h->layer_handle);
 
     return rc;
 }
@@ -1696,7 +1934,7 @@ Result appletHolderGetIndirectLayerConsumerHandle(AppletHolder *h, u64 *out) {
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
     if (h->mode!=LibAppletMode_Unknown3)
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
-    if (!kernelAbove200())
+    if (hosversionBefore(2,0,0))
         return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
 
     if (out) *out = h->layer_handle;
@@ -1854,7 +2092,7 @@ Result appletCreateTransferMemoryStorage(AppletStorage *s, void* buffer, s64 siz
 }
 
 Result appletCreateHandleStorage(AppletStorage *s, s64 inval, Handle handle) {
-    if (!kernelAbove200())
+    if (hosversionBefore(2,0,0))
         return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
 
     return _appletCmdInHandle64(&g_appletILibraryAppletCreator, &s->s, 12, handle, inval);
@@ -2008,7 +2246,7 @@ Result appletStorageGetHandle(AppletStorage *s, s64 *out, Handle *handle) {
     if (!serviceIsActive(&s->s))
         return MAKERESULT(Module_Libnx, LibnxError_NotInitialized);
 
-    if (!kernelAbove200())
+    if (hosversionBefore(2,0,0))
         return MAKERESULT(Module_Libnx, LibnxError_IncompatSysVer);
 
     rc = _appletGetSession(&s->s, &tmp_srv, 1);//OpenTransferStorage
@@ -2054,22 +2292,28 @@ AppletFocusState appletGetFocusState(void) {
     return (AppletFocusState)g_appletFocusState;
 }
 
-bool appletMainLoop(void) {
-    Result rc;
-    u32    msg = 0;
+Result appletGetMessage(u32 *msg) {
+    Result rc=0;
+    if (msg==NULL) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
 
-    if (R_FAILED(eventWait(&g_appletMessageEvent, 0)))
-        return true;
-
-    rc = _appletReceiveMessage(&msg);
-
+    rc = eventWait(&g_appletMessageEvent, 0);
     if (R_FAILED(rc))
-    {
-        if ((rc & 0x3fffff) == 0x680)
-            return true;
+        return rc;
+
+    rc = _appletReceiveMessage(msg);
+
+    if (R_FAILED(rc)) {
+        if (R_VALUE(rc) == MAKERESULT(128, 3))
+            return rc;
 
         fatalSimple(MAKERESULT(Module_Libnx, LibnxError_BadAppletReceiveMessage));
     }
+
+    return 0;
+}
+
+bool appletProcessMessage(u32 msg) {
+    Result rc;
 
     switch(msg) {
         case 0x4:
@@ -2103,4 +2347,12 @@ bool appletMainLoop(void) {
     }
 
     return true;
+}
+
+bool appletMainLoop(void) {
+    u32 msg = 0;
+
+    if (R_FAILED(appletGetMessage(&msg))) return true;
+
+    return appletProcessMessage(msg);
 }

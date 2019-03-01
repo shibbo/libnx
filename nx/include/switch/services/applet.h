@@ -82,10 +82,10 @@ typedef enum {
 
 /// LibraryAppletMode
 typedef enum {
-    LibAppletMode_AllForeground = 0,
-    LibAppletMode_Background = 1,
-    LibAppletMode_Unknown2 = 2,
-    LibAppletMode_Unknown3 = 3,
+    LibAppletMode_AllForeground = 0,  ///< Foreground
+    LibAppletMode_Background = 1,     ///< Background
+    LibAppletMode_Unknown2 = 2,       ///< Unknown
+    LibAppletMode_Unknown3 = 3,       ///< Unknown
 } LibAppletMode;
 
 /// LibraryAppletExitReason
@@ -96,6 +96,7 @@ typedef enum {
     LibAppletExitReason_Unexpected = 10,
 } LibAppletExitReason;
 
+/// ThemeColorType
 typedef enum {
     AppletThemeColorType_Default = 0,
     AppletThemeColorType_Unknown1 = 1,
@@ -138,8 +139,18 @@ typedef struct {
     u8 unk_x0[0x8];
 } AppletApplicationPlayStatistics;
 
+/// Attributes for launching applications for Quest.
+typedef struct {
+    u32 unk_x0;
+    u32 unk_x4;
+} AppletApplicationAttributeForQuest;
+
+/// Initialize applet, called automatically during app startup.
 Result appletInitialize(void);
+
+/// Exit applet, called automatically during app startup.
 void appletExit(void);
+
 Result appletGetAppletResourceUserId(u64 *out);
 AppletType appletGetAppletType(void);
 
@@ -160,6 +171,23 @@ AppletThemeColorType appletGetThemeColorType(void);
  * @note See also acc.h \ref accountGetPreselectedUser (wrapper for appletPopLaunchParameter etc).
  */
 Result appletPopLaunchParameter(AppletStorage *s, AppletLaunchParameterKind kind);
+
+/**
+ * @brief Requests to launch the specified application.
+ * @note Only available with AppletType_*Application, or AppletType_LibraryApplet on 5.0.0+.
+ * @param[in] titleID Application titleID. Value 0 can be used to relaunch the current application.
+ * @param s Optional AppletStorage object, can be NULL. This is automatically closed. When NULL on pre-4.0.0 (or with AppletType_LibraryApplet), this will internally create a tmp storage with size 0 for use with the cmd. This is the storage available to the launched application via \ref appletPopLaunchParameter with ::AppletLaunchParameterKind_Application.
+ */
+Result appletRequestLaunchApplication(u64 titleID, AppletStorage* s);
+
+/**
+ * @brief Requests to launch the specified application, for kiosk systems.
+ * @note Only available with AppletType_*Application on 3.0.0+.
+ * @param[in] titleID Application titleID
+ * @param s Optional AppletStorage object, can be NULL. This is automatically closed. When NULL on pre-4.0.0, this will internally create a tmp storage with size 0 for use with the cmd. This is the storage available to the launched application via \ref appletPopLaunchParameter with ::AppletLaunchParameterKind_Application.
+ * @param[in] attr Kiosk application attributes.
+ */
+Result appletRequestLaunchApplicationForQuest(u64 titleID, AppletStorage* s, const AppletApplicationAttributeForQuest *attr);
 
 Result appletGetDesiredLanguage(u64 *LanguageCode);
 
@@ -212,6 +240,8 @@ Result appletQueryApplicationPlayStatistics(AppletApplicationPlayStatistics *sta
  * @note \ref appletUnlockExit must be used before main() returns.
  */
 Result appletLockExit(void);
+
+/// Unlocks exiting, see \ref appletLockExit.
 Result appletUnlockExit(void);
 
 /**
@@ -221,6 +251,24 @@ Result appletUnlockExit(void);
 Result appletSetScreenShotPermission(s32 val);
 
 Result appletSetScreenShotImageOrientation(s32 val);
+
+/**
+ * @brief Stops forwarding the input to the foreground app, works only in the Overlay applet context.
+ * @note You have to call this to receive inputs through the hid service when running as the overlay applet.
+ */
+Result appletBeginToWatchShortHomeButtonMessage(void);
+
+/**
+ * @brief Forwards input to the foreground app, works only in the Overlay applet context.
+ * @note After calling this the overlay applet won't receive any input until \ref appletBeginToWatchShortHomeButtonMessage is called again.
+ */
+Result appletEndToWatchShortHomeButtonMessage(void);
+
+/**
+ * @brief Get an event that fires when the home button is pressed, doesn't interfere with home menu. This event does not auto clear.
+ * @note Doesn't fire for long press.
+ */
+Result appletHomeButtonReaderLockAccessorGetEvent(Event *out_event);
 
 /**
  * @brief Pushes a storage to the general channel. Used for sending requests to qlaunch.
@@ -255,7 +303,7 @@ bool appletHolderActive(AppletHolder *h);
 
 /**
  * @brief Gets the IndirectLayerConsumerHandle loaded during \ref appletCreateLibraryApplet, on 2.0.0+.
- * @note  Only available when \ref LibAppletMode is \ref LibAppletMode_Unknown3.
+ * @note  Only available when \ref LibAppletMode is ::LibAppletMode_Unknown3.
  * @param h AppletHolder object.
  * @param out Output IndirectLayerConsumerHandle.
  */
@@ -395,6 +443,7 @@ Result appletStorageRead(AppletStorage *s, s64 offset, void* buffer, size_t size
 /**
  * @brief Gets data for a HandleStorage originally from \ref appletCreateHandleStorage input.
  * @note  Only available on 2.0.0+.
+ * @param s Storage object.
  * @param out Output value.
  * @param handle Output handle.
  */
@@ -411,7 +460,20 @@ Result appletStorageGetHandle(AppletStorage *s, s64 *out, Handle *handle);
 Result appletStorageMap(AppletStorage *s, void** addr, size_t *size);
 
 /**
+ * @brief Gets a notification message.
+ */
+Result appletGetMessage(u32 *msg);
+
+/**
+ * @brief Processes the current applet status using the specified msg.
+ * @param msg Notification message, normally from \ref appletGetMessage.
+ * @return Whether the application should continue running.
+ */
+bool appletProcessMessage(u32 msg);
+
+/**
  * @brief Processes the current applet status. Generally used within a main loop.
+ * @note Uses \ref appletGetMessage and \ref appletProcessMessage internally.
  * @return Whether the application should continue running.
  */
 bool appletMainLoop(void);
